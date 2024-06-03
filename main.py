@@ -73,6 +73,7 @@ async def image_to_image(
 ):
     init_bytes = await init_image.read()
     init_image = Image.open(BytesIO(init_bytes))
+    init_width, init_height = init_image.size
     init_image = init_image.convert("RGB").resize((512, 512))
 
     image = request.state.img2img(
@@ -82,6 +83,7 @@ async def image_to_image(
         strength=strength,
         guidance_scale=0.0,
     ).images[0]
+    image = image.resize((init_width, init_height))
 
     bytes = BytesIO()
     image.save(bytes, "PNG")
@@ -100,6 +102,7 @@ async def inpainting(
 ):
     init_bytes = await init_image.read()
     init_image = Image.open(BytesIO(init_bytes))
+    init_width, init_height = init_image.size
     init_image = init_image.convert("RGB").resize((512, 512))
     mask_bytes = await mask_image.read()
     mask_image = Image.open(BytesIO(mask_bytes))
@@ -113,6 +116,7 @@ async def inpainting(
         strength=strength,
         guidance_scale=0.0,
     ).images[0]
+    image = image.resize((init_width, init_height))
 
     bytes = BytesIO()
     image.save(bytes, "PNG")
