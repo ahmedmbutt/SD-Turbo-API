@@ -1,4 +1,4 @@
-from fastapi import FastAPI, Request, Form, File, UploadFile
+from fastapi import FastAPI, Request, UploadFile, Form, File
 from fastapi.responses import StreamingResponse
 from contextlib import asynccontextmanager
 from starlette.middleware.cors import CORSMiddleware
@@ -10,13 +10,25 @@ from diffusers import (
     AutoPipelineForImage2Image,
     AutoPipelineForInpainting,
 )
+from transformers import CLIPFeatureExtractor
+from diffusers.pipelines.stable_diffusion import StableDiffusionSafetyChecker
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    text2img = AutoPipelineForText2Image.from_pretrained("stabilityai/sd-turbo").to(
-        "cpu"
+    feature_extractor = CLIPFeatureExtractor.from_pretrained(
+        "openai/clip-vit-base-patch32"
     )
+
+    safety_checker = StableDiffusionSafetyChecker.from_pretrained(
+        "CompVis/stable-diffusion-safety-checker"
+    )
+
+    text2img = AutoPipelineForText2Image.from_pretrained(
+        "stabilityai/sd-turbo",
+        safety_checker=safety_checker,
+        feature_extractor=feature_extractor,
+    ).to("cpu")
 
     img2img = AutoPipelineForImage2Image.from_pipe(text2img).to("cpu")
 
@@ -24,9 +36,12 @@ async def lifespan(app: FastAPI):
 
     yield {"text2img": text2img, "img2img": img2img, "inpaint": inpaint}
 
-    del text2img
-    del img2img
     del inpaint
+    del img2img
+    del text2img
+
+    del safety_checker
+    del feature_extractor
 
 
 app = FastAPI(lifespan=lifespan)
@@ -53,9 +68,16 @@ async def text_to_image(
     prompt: str = Form(...),
     num_inference_steps: int = Form(1),
 ):
-    image = request.state.text2img(
-        prompt=prompt, num_inference_steps=num_inference_steps, guidance_scale=0.0
-    ).images[0]
+    results = request.state.text2img(
+        prompt=prompt,
+        num_inference_steps=num_inference_steps,
+        guidance_scale=0.0,
+    )
+
+    if not results.nsfw_content_detected[0]:
+        image = results.images[0]
+    else:
+        image = Image.new("RGB", (512, 512), "black")
 
     bytes = BytesIO()
     image.save(bytes, "PNG")
@@ -76,14 +98,18 @@ async def image_to_image(
     init_width, init_height = init_image.size
     init_image = init_image.convert("RGB").resize((512, 512))
 
-    image = request.state.img2img(
+    results = request.state.img2img(
         prompt,
         image=init_image,
         num_inference_steps=num_inference_steps,
         strength=strength,
         guidance_scale=0.0,
-    ).images[0]
-    image = image.resize((init_width, init_height))
+    )
+
+    if not results.nsfw_content_detected[0]:
+        image = results.images[0].resize((init_width, init_height))
+    else:
+        image = Image.new("RGB", (512, 512), "black")
 
     bytes = BytesIO()
     image.save(bytes, "PNG")
@@ -108,15 +134,19 @@ async def inpainting(
     mask_image = Image.open(BytesIO(mask_bytes))
     mask_image = mask_image.convert("RGB").resize((512, 512))
 
-    image = request.state.inpaint(
+    results = request.state.inpaint(
         prompt,
         image=init_image,
         mask_image=mask_image,
         num_inference_steps=num_inference_steps,
         strength=strength,
         guidance_scale=0.0,
-    ).images[0]
-    image = image.resize((init_width, init_height))
+    )
+
+    if not results.nsfw_content_detected[0]:
+        image = results.images[0].resize((init_width, init_height))
+    else:
+        image = Image.new("RGB", (512, 512), "black")
 
     bytes = BytesIO()
     image.save(bytes, "PNG")
